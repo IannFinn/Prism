@@ -20,8 +20,8 @@ def load_from_obj(filename):
         normals = np.array(obj.norm)
     for i in range(0,len(obj.face),3):
         faces[i//3,0] = obj.face[i][0]-1
-        faces[i//3,1] = obj.face[i+1][0]-1
-        faces[i//3,2] = obj.face[i+2][0]-1
+        faces[i//3,1] = obj.face[i+2][0]-1
+        faces[i//3,2] = obj.face[i+1][0]-1
         if not calculate_normals:
             faces[i//3,3] = obj.face[i][2]-1
         else:
@@ -123,7 +123,7 @@ ShardType = Shard.class_type.instance_type
 depth_map = [".","`",",","_","-","*","=","/","$","&","#"]
 lut = np.array([
     f"\x1b[48;5;{232+i}m \x1b[0m".encode("ascii")
-    for i in range(25)
+    for i in range(23)
 ])
 @jitclass([("position", float64[:]),("origin", float64[:]),("sun", float64[::1]),("depth_buffer", float64[:,:]),("width",int64),("height",int64),("delta_time",float64),("rotation", float64[:]),("surface_position", float64[:]),("shards",types.ListType(ShardType)),("x_rotation",float64[:,::1]),("y_rotation",float64[:,::1]),("z_rotation",float64[:,::1])])
 class Crystal:
@@ -198,73 +198,72 @@ class Crystal:
             ray_y = ((y - self.surface_position[1])/self.surface_position[2])*t
             ray_points[t] = np.array((ray_x,ray_y,t))
         return ray_points
-    def lerp(self,v0, v1, t):
-        return (1 - t) * v0 + t * v1
-    def line_3d(self,x0, y0, z0, x1, y1, z1):
-        if x0 == x1:
-            yield (x0,y0,z0)
-            return
-        length = abs(x0-x1)
-        if length == 1:
-            yield (x0,y0,z0)
-            return
-        direction = 1 if x0 < x1 else -1 
-        for i in range(length+1):
-            t = float(i)/float(length)
-            yield (x0+direction*i,y0,self.lerp(z0,z1,t))
+    def triangle(self,x1,y1,z1,x2,y2,z2,x3,y3,z3):
+        Y1 = int(round(16.0 * y1))
+        Y2 = int(round(16.0 * y2))
+        Y3 = int(round(16.0 * y3))
+    
+        X1 = int(round(16.0 * x1))
+        X2 = int(round(16.0 * x2))
+        X3 = int(round(16.0 * x3))
 
-    def fill_bottom_flat_triangle(self,v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z):
-        invslope1 = float(v2x - v1x) / float(v2y - v1y)
-        invslope2 = float(v3x - v1x) / float(v3y - v1y)
-        curx1 = v1x;
-        curx2 = v1x;
-        for scanlineY in range(v1y,v2y+1):
-            t = float(scanlineY-v1y) / float((v2y)-v1y)
-            z1 = self.lerp(v1z,v2z,t)
-            z2 = self.lerp(v1z,v3z,t)
-            for point in self.line_3d(int(curx1),scanlineY,z1,int(curx2),scanlineY,z2):
-                yield point
-            curx1 += invslope1
-            curx2 += invslope2
-    def fill_top_flat_triangle(self,v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z):
-        invslope1 = float(v3x - v1x) / float(v3y - v1y);
-        invslope2 = float(v3x - v2x) / float(v3y - v2y);
-        curx1 = v3x;
-        curx2 = v3x;
-        if float((v1y+1)-v3y) == 0:
-            for point in self.line_3d(v1x,v1y,v1z,v2x,v2y,v2z):
-                yield point
-            return
-        for scanlineY in range(v3y,v1y,-1):
-            t = float(scanlineY-v3y) / float((v1y+1)-v3y)
-            z1 = self.lerp(v3z,v1z,t)
-            z2 = self.lerp(v3z,v2z,t)
-            for point in self.line_3d(int(curx1),scanlineY,z1,int(curx2),scanlineY,z2):
-                yield point
-            curx1 -= invslope1
-            curx2 -= invslope2
+        DX12 = X1 - X2
+        DX23 = X2 - X3
+        DX31 = X3 - X1
 
-    def drawTriangle(self,v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z):
-        if v2y == v3y and v1y == v2y:
-            for point in self.line_3d(v1x,v1y,v1z,v2x,v2y,v2z):
-                yield point
-            for point in self.line_3d(v2x,v2y,v2z,v3x,v3y,v3z):
-                yield point
-        elif v2y == v3y:
-            for point in self.fill_bottom_flat_triangle(v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z):
-                yield point
-        elif v1y == v2y:
-            for point in self.fill_top_flat_triangle(v1x,v1y,v1z,v2x,v2y,v2z,v3x,v3y,v3z):
-                yield point
-        else:
-            t = float(v2y - v1y) / float(v3y - v1y)
-            v4x = int(v1x + (t) * (v3x - v1x))
-            v4y = v2y
-            v4z = self.lerp(v3z,v1z,1-t)
-            for point in self.fill_bottom_flat_triangle(v1x, v1y, v1z, v2x, v2y, v2z, v4x, v4y, v4z):
-                yield point
-            for point in self.fill_top_flat_triangle(v2x, v2y, v2z, v4x, v4y, v4z, v3x, v3y, v3z):
-                yield point
+        DY12 = Y1 - Y2
+        DY23 = Y2 - Y3
+        DY31 = Y3 - Y1
+
+        FDX12 = DX12 << 4
+        FDX23 = DX23 << 4
+        FDX31 = DX31 << 4
+
+        FDY12 = DY12 << 4
+        FDY23 = DY23 << 4
+        FDY31 = DY31 << 4
+
+        minx = (min(X1, X2, X3) + 0xF) >> 4
+        maxx = (max(X1, X2, X3) + 0xF) >> 4
+        miny = (min(Y1, Y2, Y3) + 0xF) >> 4
+        maxy = (max(Y1, Y2, Y3) + 0xF) >> 4
+        
+        C1 = DY12 * X1 - DX12 * Y1
+        C2 = DY23 * X2 - DX23 * Y2
+        C3 = DY31 * X3 - DX31 * Y3
+
+        if (DY12 < 0 or (DY12 == 0 and DX12 > 0)):
+            C1 += 1
+        if (DY23 < 0 or (DY23 == 0 and DX23 > 0)):
+            C2 += 1
+        if (DY31 < 0 or (DY31 == 0 and DX31 > 0)):
+            C3 += 1
+
+        CY1 = C1 + DX12 * (miny << 4) - DY12 * (minx << 4)
+        CY2 = C2 + DX23 * (miny << 4) - DY23 * (minx << 4)
+        CY3 = C3 + DX31 * (miny << 4) - DY31 * (minx << 4)
+        divisor = (( y2 - y3 )*(x1 - x3) + (x3 - x2)*(y1 - y3))
+        for y in range(miny,maxy):
+            CX1 = CY1
+            CX2 = CY2
+            CX3 = CY3
+            for x in range(minx,maxx):
+                if (CX1 > 0 and CX2 > 0 and CX3 > 0):
+                    if z1 == z2 and z2 == z3:
+                        z = z1
+                    else:
+                        w1 = ((y2 - y3)*(x - x3) + (x3 - x2)*(y - y3)) / divisor
+                        w2 = ( (y3 - y1) * (x - x3) + (x1 - x3) * (y- y3) ) / divisor
+                        w3 =  1 -  w1 - w2
+                        z = w1 * z1 + w2 * z2 + w3 * z3
+                    #print(z,w1,w2,w3,z1,z2,z3)
+                    yield (x,y,z)
+                CX1 -= FDY12
+                CX2 -= FDY23
+                CX3 -= FDY31
+            CY1 += FDX12
+            CY2 += FDX23
+            CY3 += FDX31
     def render(self):
         w,h = self.width,self.height
         aspect = w / h
@@ -282,8 +281,8 @@ class Crystal:
                 y = (self.surface_position[2] / transformed[2])*transformed[1] + self.surface_position[1]
                 x /= aspect
                 y /= char_aspect
-                x = round((x + 1) * w / 2)
-                y = round((1 - y) * h / 2)
+                x = (x + 1) * w / 2
+                y = (1 - y) * h / 2
                 z = transformed[2]
                 rendered_points[i,0] = x
                 rendered_points[i,1] = y
@@ -293,37 +292,28 @@ class Crystal:
                 ssp1 = rendered_points[p1]
                 ssp2 = rendered_points[p2]
                 ssp3 = rendered_points[p3]
-                if ssp1[2] < 0 or ssp2[2] < 0 or ssp3[2] < 0:
+                if ssp1[2] < 0.05 or ssp2[2] < 0.05 or ssp3[2] < 0.05:
                     continue
-                if ssp1[1] > ssp2[1]:
-                    ssp1,ssp2 = ssp2,ssp1
-                if ssp2[1] > ssp3[1]:
-                    ssp2,ssp3 = ssp3,ssp2
-                if ssp1[1] > ssp2[1]:
-                    ssp1,ssp2 = ssp2,ssp1
                 x,y,z = ssp1
                 x2,y2,z2 = ssp2
                 x3,y3,z3 = ssp3
-                x,y = int(x),int(y)
-                x2,y2 = int(x2),int(y2)
-                x3,y3 = int(x3),int(y3)
-                if (x >= w or x < 0 or y >= h or y < 0) and (x2 >= w or x2 < 0 or y2 >= h or y2 < 0) and (x3 >= w or x3 < 0 or y >= h or y < 0):
-                    continue
-                test = self.depth_buffer[y,x]
-                test2 = self.depth_buffer[y2,x2]
-                test3 = self.depth_buffer[y3,x3]
-                if test < z and test2 < z2 and test3 < z3:
-                    continue
+                average_z = (z + z2 + z3) / 3
                 N = shard.rotate(shard.normals[n])
                 N /= np.linalg.norm(N)
+                b = max(0,N @ self.sun)
+                B = lut[round(b*22)]
 
-                for x4,y4,z4 in self.drawTriangle(x,y,z,x2,y2,z2,x3,y3,z3):
+                for x4,y4,z4 in self.triangle(x,y,z,x2,y2,z2,x3,y3,z3):
                     if x4 >= w or x4 < 0 or y4 >= h or y4 < 0:
                         continue
-                    if z4 < self.depth_buffer[y4,x4]:
+                    test = self.depth_buffer[y4,x4]
+                    if z4 == test:
+                        if average_z < test:
+                            self.depth_buffer[y4,x4] = z4
+                            draw_buffer[int(y4*w + x4)] = B
+                    elif z4 < self.depth_buffer[y4,x4]:
                         self.depth_buffer[y4,x4] = z4
-                        b = max(0,N @ self.sun)+0.2
-                        draw_buffer[int(y4*w + x4)] = lut[round(b*10)]
+                        draw_buffer[int(y4*w + x4)] = B
         return draw_buffer
 def centroid(points):
     return np.sum(points,axis=0) / points.shape[0]
@@ -337,6 +327,13 @@ def normalize_points(points):
     return normalize(points,minima,maxima)
 def prism(pos):
     points,faces,normals = load_from_obj("/home/captn/prism.obj")
+    normalized = normalize_points(points)
+    prsm = Shard(normalized,np.max(normalized,axis=0),faces,normals)
+    prsm.position = pos
+    prsm.origin = centroid(normalized)
+    return prsm
+def triangle(pos):
+    points,faces,normals = load_from_obj("/home/captn/triangle.obj")
     normalized = normalize_points(points)
     prsm = Shard(normalized,np.max(normalized,axis=0),faces,normals)
     prsm.position = pos
@@ -374,12 +371,15 @@ if __name__ == "__main__":
     miku = make_miku(np.array((-1.0,0.0,0.0)))
     fred = freddy(np.array((1.0,0.0,0.0)))
     spam = make_spamton(np.array((0.0,0.0,0.0)))
+    trig = triangle(np.array((1.0,0.0,0.0)))
     spam.rot_y(np.radians(180))
     fred.rot_y(np.radians(180))
+    trig.rot_y(np.radians(-90))
     #crs.add_shard(cube)
-    crs.add_shard(miku)
+    #crs.add_shard(miku)
     #crs.add_shard(spam)
-    #crs.add_shard(prsm)
+    #crs.add_shard(trig)
+    crs.add_shard(prsm)
     #crs.add_shard(fred)
 
     import time
@@ -394,7 +394,7 @@ if __name__ == "__main__":
         if num == np.inf:
             return " "
         return str(int(num*10))[0]
-    with term.cbreak(), term.hidden_cursor():#, term.fullscreen():#, term.mouse_enabled():
+    with term.cbreak(), term.hidden_cursor(), term.fullscreen():#, term.mouse_enabled():
         while True:
             start_frame = time.time()
             key = term.inkey(timeout=timeout)
@@ -439,10 +439,17 @@ if __name__ == "__main__":
             frame_data = crs.render()
             with term.dec_modes_enabled(term.DecPrivateMode.SYNCHRONIZED_OUTPUT):
                 #pass
+                print(term.home + term.clear, end="") 
                 print(b"\n".join([b"".join(frame_data[i*term.width:(i+1)*term.width]) for i in range(term.height)]).decode(),end="")
-                #print(term.home + term.clear + 
+                
                 #print("\n".join(["".join([term.color_rgb(*pixel)("#") for pixel in y]) for y in frame_data]),end="")
-                #print("\n".join(["".join([convert(num) for num in crs.depth_buffer[y]]) for y in range(term.height)]))
+                # maxxx = np.max(crs.depth_buffer,where=~np.isinf(crs.depth_buffer), initial=-1) 
+                # minn = np.min(crs.depth_buffer) 
+                # if (maxxx-minn) != 0:
+                    # crs.depth_buffer =  (crs.depth_buffer-minn) / (maxxx-minn)
+                # else:
+                    # crs.depth_buffer =  (crs.depth_buffer-minn)
+                # print("\n".join(["".join([convert(num) for num in crs.depth_buffer[y]]) for y in range(term.height)]))
                 sys.stdout.flush()
             end = time.time()
             crs.delta_time = end-start_frame

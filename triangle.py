@@ -1,11 +1,11 @@
-from prism import Crystal,Shard,prism
+from prism import Crystal,Shard,prism,triangle
 import numpy as np
 
 WIDTH,HEIGHT = 80,30
 crs = Crystal(WIDTH,HEIGHT)
-crs.rot_x(-5.96902604)
-crs.position = np.array((1.38,  0.81, -0.43))
-prsm = prism(np.array((1.0,0.0,0.0)))
+#crs.rot_x(-5.96902604)
+#crs.position = np.array((1.38,  0.81, -0.43))
+prsm = triangle(np.array((0.0,0.0,0.0)))
 crs.add_shard(prsm)
 def convert(num):
     if num == np.inf:
