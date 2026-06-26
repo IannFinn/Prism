@@ -36,6 +36,7 @@ __version__ = '0.2.0'
 
 log = logging.getLogger(__file__)
 
+RE_USEMTL = re.compile(r'^usemtl (.+)$')
 RE_COMMENT = re.compile(r'#[^\n]*\n', flags=re.M)
 RE_VERT = re.compile(r'^v\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)$')
 RE_TEXT = re.compile(r'^vt\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)(?:\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?))?$')
@@ -126,7 +127,7 @@ class Obj:
         text = []
         norm = []
         face = []
-
+        mtl  = []
         data = RE_COMMENT.sub('\n', data)
 
         for line in data.splitlines():
@@ -179,9 +180,13 @@ class Obj:
                 v, t, n = match.group(16, 18, 20)
                 face.append((int(v), int_or_none(t), int_or_none(n)))                
                 continue 
-
+            
+            match = RE_USEMTL.match(line)
+            if match:
+                mtl.append(len(face))
             log.debug('unknown line "%s"', line)
-
+        if not mtl:
+            mtl.append(0)
         if not face:
             raise Exception('empty')
 
@@ -193,15 +198,15 @@ class Obj:
 
             if (n0 is None) ^ (n is None):
                 raise Exception('inconsinstent')
+        
+        return Obj(vert, text, norm, face, mtl)
 
-        return Obj(vert, text, norm, face)
-
-    def __init__(self, vert, text, norm, face):
+    def __init__(self, vert, text, norm, face, mtl):
         self.vert = vert
         self.text = text
         self.norm = norm
         self.face = face
-
+        self.mtl = mtl
     def pack(self, packer=default_packer) -> bytes:
         '''
             Args:
