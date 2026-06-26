@@ -44,6 +44,9 @@ RE_NORM = re.compile(r'^vn\s+(-?\d+(?:\.\d+)?(?:[Ee]-?\d+)?)\s+(-?\d+(?:\.\d+)?(
 RE_TRIANGLE_FACE = re.compile(r'^f\s+(\d+)(/(\d+)?(/(\d+))?)?\s+(\d+)(/(\d+)?(/(\d+))?)?\s+(\d+)(/(\d+)?(/(\d+))?)?$')
 RE_QUAD_FACE = re.compile(r'^f\s+(\d+)(/(\d+)?(/(\d+))?)?\s+(\d+)(/(\d+)?(/(\d+))?)?\s+(\d+)(/(\d+)?(/(\d+))?)?\s+(\d+)(/(\d+)?(/(\d+))?)?$')
 
+RE_NEWMTL = re.compile(r'^newmtl (.+)$')
+RE_MAPKD = re.compile(r'^map_Kd (.+)$')
+
 PACKER = 'lambda vx, vy, vz, tx, ty, tz, nx, ny, nz: struct.pack("%df", %s)'
 
 
@@ -58,6 +61,31 @@ def int_or_none(x):
 def safe_float(x):
     return 0.0 if x is None else float(x)
 
+class Mtl:
+    @staticmethod
+    def open(filename) -> 'Mtl':
+        return Obj.fromstring(open(filename).read(),(".".join(open(filename).split(".")[:-1]) + ".mtl").read())
+    @staticmethod
+    def fromstring(data) -> 'Mtl':
+        material_mapping = {}
+        new_mat = ""
+        for line in data.splitlines():
+            line = line.strip()
+
+            if not line:
+                continue
+            match = RE_NEWMTL.match(line)
+            if match:
+                new_mat = match.group(1)
+                continue
+            if new_mat:
+                match = RE_MAPKD.match(line)
+                if match:
+                    mat_path = match.group(1)
+                    material_mapping[new_mat] = mat_path
+                    new_mat = None
+                    continue
+        return material_mapping
 
 class Obj:
     @staticmethod
@@ -78,8 +106,8 @@ class Obj:
 
                     model = obj.Obj.open('box.obj')
         '''
-
-        return Obj.fromstring(open(filename).read())
+        materials = Mtl.fromstring(open((".".join(filename.split(".")[:-1]) + ".mtl")).read())
+        return Obj.fromstring(open(filename).read(),materials)
 
     @staticmethod
     def frombytes(data) -> 'Obj':
@@ -104,7 +132,7 @@ class Obj:
         return Obj.fromstring(data.decode())
 
     @staticmethod
-    def fromstring(data) -> 'Obj':
+    def fromstring(data,material_data) -> 'Obj':
         '''
             Args:
                 data (str): The obj file content.
@@ -183,10 +211,10 @@ class Obj:
             
             match = RE_USEMTL.match(line)
             if match:
-                mtl.append(len(face))
+                mtl.append((len(face),match.group(1)))
             log.debug('unknown line "%s"', line)
         if not mtl:
-            mtl.append(0)
+            mtl.append((0,""))
         if not face:
             raise Exception('empty')
 
@@ -199,14 +227,15 @@ class Obj:
             if (n0 is None) ^ (n is None):
                 raise Exception('inconsinstent')
         
-        return Obj(vert, text, norm, face, mtl)
+        return Obj(vert, text, norm, face, mtl, material_data)
 
-    def __init__(self, vert, text, norm, face, mtl):
+    def __init__(self, vert, text, norm, face, mtl, mtl_map):
         self.vert = vert
         self.text = text
         self.norm = norm
         self.face = face
         self.mtl = mtl
+        self.mtl_map = mtl_map
     def pack(self, packer=default_packer) -> bytes:
         '''
             Args:

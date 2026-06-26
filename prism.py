@@ -8,189 +8,12 @@ from math import cos,sin
 from numba import njit, prange,typed,typeof,types
 from numba.experimental import jitclass
 from numba.typed import List as NumbaList
-from objloader import Obj
 from functools import wraps
 from datetime import datetime
 import threading
 import random
 from PIL import Image
-
-def load_from_obj(filename):
-    obj = Obj.open(filename)
-    faces = np.zeros((len(obj.face)//3,8),dtype=np.int64)
-    calculate_normals = False
-    normals = np.zeros((len(obj.face)//3,3),dtype=np.float64)
-    texture_coords = np.array(obj.text)
-    if len(obj.norm) == 0:
-        calculate_normals = True
-    else:
-        normals = np.array(obj.norm)
-    for i in range(0,len(obj.face),3):
-        faces[i//3,0] = obj.face[i][0]-1
-        faces[i//3,1] = obj.face[i+2][0]-1
-        faces[i//3,2] = obj.face[i+1][0]-1
-        if not calculate_normals:
-            faces[i//3,3] = obj.face[i][2]-1
-        else:
-            v0 = np.array(obj.vert[obj.face[i][0]-1])
-            v1 = np.array(obj.vert[obj.face[i+1][0]-1])
-            v2 = np.array(obj.vert[obj.face[i+2][0]-1])
-            normals[i//3] = np.cross((v1-v0),(v2-v0))
-            faces[i//3,3] = i//3
-        used_material = 0
-        for mat_id,material in enumerate(obj.mtl):
-            if material > i:
-                break
-            used_material = mat_id
-        faces[i//3,4] = used_material
-        faces[i//3,5] =  obj.face[i][1]-1
-        faces[i//3,6] =  obj.face[i+2][1]-1
-        faces[i//3,7] =  obj.face[i+1][1]-1
-    return np.array(obj.vert),faces,normals,texture_coords
-
-def load_from_image():
-    return np.asarray(Image.open('/home/captn/Downloads/mikuplush.jpg'))
-test = load_from_image()
-def centroid(points):
-    return np.sum(points,axis=0) / points.shape[0]
-def normalize_points(points):
-    minima = np.min(points,axis=0)
-    maxima = np.max(points,axis=0)
-    scale = np.max(maxima - minima)
-    return (points - minima) / scale
-
-def load_from_tris(tris_data):
-    return np.array([[float(num) for num in vector.split(" ")] for vector in tris_data.strip().replace("\n\n","\n").split("\n")[1:]],dtype=np.float64)
-
-@jitclass([("points", float64[:,:]),("faces", int64[:,:]),("normals", float64[:,::1]),("texture_coordinates", float64[:,::1]),("position", float64[:]),("bounding_point", float64[:]),("rotation", float64[:]),("scale", float64[:]),("origin", float64[:]),("_x_rot_m", float64[:,::1]),("_y_rot_m", float64[:,::1]),("_z_rot_m", float64[:,::1]),("_scale_m", float64[:,::1])])
-class Shard:
-    def __init__(self,points,bounding_point,faces,normals,coords):
-        self.points = points
-        self.faces = faces
-        self.normals = normals
-        self.texture_coordinates = coords
-        self.position = np.array([0.0,0.0,0.0])
-        self.rotation = np.zeros(3)
-        self.scale = np.ones(3)
-        self.origin = np.array((0.5,0.5,0.5))
-        self._x_rot_m = np.empty((3, 3), dtype=np.float64)
-        self._y_rot_m = np.empty((3, 3), dtype=np.float64)
-        self._z_rot_m = np.empty((3, 3), dtype=np.float64)
-        self._scale_m = np.empty((3, 3), dtype=np.float64)
-        self.bounding_point = bounding_point
-        self.compute_transform()
-    def rot_x(self,theta):
-        self.rotation[0] = theta
-        c, s = np.cos(theta), np.sin(theta)
-        self._x_rot_m[0, 0] = 1.0
-        self._x_rot_m[0, 1] = 0.0
-        self._x_rot_m[0, 2] = 0.0
-        self._x_rot_m[1, 0] = 0.0
-        self._x_rot_m[1, 1] = c
-        self._x_rot_m[1, 2] = -s
-        self._x_rot_m[2, 0] = 0.0
-        self._x_rot_m[2, 1] = s
-        self._x_rot_m[2, 2] = c
-    def rot_y(self,theta):
-        self.rotation[1] = theta
-        c, s = np.cos(theta), np.sin(theta)
-        self._y_rot_m[0, 0] = c
-        self._y_rot_m[0, 1] = 0.0
-        self._y_rot_m[0, 2] = s
-        self._y_rot_m[1, 0] = 0.0
-        self._y_rot_m[1, 1] = 1.0
-        self._y_rot_m[1, 2] = 0.0
-        self._y_rot_m[2, 0] = -s
-        self._y_rot_m[2, 1] = 0.0
-        self._y_rot_m[2, 2] = c
-    def rot_z(self,theta):
-        self.rotation[2] = theta
-        c, s = np.cos(theta), np.sin(theta)
-        self._z_rot_m[0, 0] = c
-        self._z_rot_m[0, 1] = -s
-        self._z_rot_m[0, 2] = 0.0
-        self._z_rot_m[1, 0] = s
-        self._z_rot_m[1, 1] = c
-        self._z_rot_m[1, 2] = 0.0
-        self._z_rot_m[2, 0] = 0.0
-        self._z_rot_m[2, 1] = 0.0
-        self._z_rot_m[2, 2] = 1.0
-    def set_scale(self,scale):
-        self.scale = scale
-        self._scale_m[0, 0] = scale[0]
-        self._scale_m[0, 1] = 0.0
-        self._scale_m[0, 2] = 0.0
-        self._scale_m[1, 0] = 0.0
-        self._scale_m[1, 1] = scale[1]
-        self._scale_m[1, 2] = 0.0
-        self._scale_m[2, 0] = 0.0
-        self._scale_m[2, 1] = 0.0
-        self._scale_m[2, 2] = scale[2]
-    def compute_transform(self):
-        self.rot_x(self.rotation[0])
-        self.rot_y(self.rotation[1])
-        self.rot_z(self.rotation[2])
-        self.set_scale(self.scale)
-    def rotate(self,point):
-        point = self._y_rot_m @ point
-        point = self._x_rot_m @ point
-        point = self._z_rot_m @ point
-        return point
-    def transform(self,point):
-        point = point - self.origin
-        point = self._scale_m @ point
-        point = self._y_rot_m @ point
-        point = self._x_rot_m @ point
-        point = self._z_rot_m @ point
-        point = point + self.origin
-        point = point + self.position
-        return point
-    
-def from_obj(filename):
-    points,faces,normals,texts = load_from_obj(filename)
-    normalized = normalize_points(points)
-    shrd = Shard(normalized,np.max(normalized,axis=0),faces,normals,texts)
-    shrd.origin = centroid(normalized)
-    return shrd    
-
-ShardType = Shard.class_type.instance_type
-depth_map = [".","`",",","_","-","*","=","/","$","&","#"]
-lut = np.array([
-    f"\x1b[48;5;{232+i}m \x1b[0m".encode("ascii")
-    for i in range(23)
-])
-
-
-import colorsys
-color_pallette = []
-
-color_count = 80
-saturation_ramps = 60
-brightness_ramps = 100
-for brightness in range(brightness_ramps):
-    saturations = []
-    for sat in range(saturation_ramps):
-        group = []
-        for i in range(color_count):
-            r,g,b = colorsys.hsv_to_rgb(i / (color_count-1), sat / (saturation_ramps-1), brightness / (brightness_ramps-1))
-            r,g,b = int(r*255),int(g*255),int(b*255)
-            group.append(f"\x1b[48;2;{r};{g};{b}m \x1b[0m".encode("ascii"))
-        saturations.append(group)
-    color_pallette.append(saturations)
-
-color_pallette = np.array(color_pallette)
-
-
-def quantise(image,color_count,brightness_ramps):
-    width,height,_ = image.shape
-    new_image = np.zeros((width,height,2), dtype=np.int64)
-    for y in range(height):
-        for x in range(width):
-            r,g,b = image[y,x]
-            h,s,v = colorsys.rgb_to_hsv(r/255,g/255,b/255)
-            new_image[y, x] = (int(s*(saturation_ramps-1)),int(h*(color_count-1)))
-    return new_image,width,height
-test_image,w,h = quantise(test,color_count,brightness_ramps)
+from shard import Shard,from_obj,ShardType,color_palette,brightness_ramps
 @jitclass([("position", float64[:]),("origin", float64[:]),("sun", float64[::1]),("depth_buffer", float64[:,:]),("width",int64),("height",int64),("delta_time",float64),("rotation", float64[:]),("surface_position", float64[:]),("shards",types.ListType(ShardType)),("x_rotation",float64[:,::1]),("y_rotation",float64[:,::1]),("z_rotation",float64[:,::1])])
 class Crystal:
     def __init__(self,w,h):
@@ -268,7 +91,7 @@ class Crystal:
         Y1 = int(round(16.0 * y1))
         Y2 = int(round(16.0 * y2))
         Y3 = int(round(16.0 * y3))
-    
+
         X1 = int(round(16.0 * x1))
         X2 = int(round(16.0 * x2))
         X3 = int(round(16.0 * x3))
@@ -315,7 +138,6 @@ class Crystal:
             CX3 = CY3
             for x in range(minx,maxx):
                 if (CX1 > 0 and CX2 > 0 and CX3 > 0):
-                    z = z1
                     w1 = ((y2 - y3)*(x - x3) + (x3 - x2)*(y - y3)) / divisor
                     w2 = ( (y3 - y1) * (x - x3) + (x1 - x3) * (y - y3) ) / divisor
                     w3 =  1 - w1 - w2
@@ -345,14 +167,13 @@ class Crystal:
         global color_count
         x,_,_ = self.pcg3d(int(u*1000000),int(v*1000000),int(w*1000000))
         return int(min(max(0,u + ((x/np.iinfo(int64).max))*0.008),1) * (color_count-1))
-    def texture_shade(self,uv1,uv2,uv3,w1,w2,w3,z1,z2,z3):
+    def texture_shade(self,uv1,uv2,uv3,w1,w2,w3,z1,z2,z3,image,width,height):
         u = w1 * (uv1[0]/z1) + w2 * (uv2[0]/z2) + w3 * (uv3[0]/z3)
         v = w1 * (uv1[1]/z1) + w2 * (uv2[1]/z2) + w3 * (uv3[1]/z3)
         recipricol_w = w1 * (1/z1) + w2 * (1/z2) + w3 * (1/z3)
         u /= recipricol_w
         v /= recipricol_w
-        return test_image[int(v*h),int(w*u)]
-        #return int(min(max(0,u),1) * (color_count-1))
+        return image[int((1-(v%1))*(height-1)),int((width-1)*(1-(u%1)))]
     def render(self):
         w,h = self.width,self.height
         aspect = w / h
@@ -384,32 +205,29 @@ class Crystal:
                 x,y,z = ssp1
                 x2,y2,z2 = ssp2
                 x3,y3,z3 = ssp3
-                #average_z = (z + z2 + z3) / 3
                 uv1 = shard.texture_coordinates[t1]
                 uv2 = shard.texture_coordinates[t2]
                 uv3 = shard.texture_coordinates[t3]
-
+                
+                image = shard.textures[material]
+                width,height,_ = image.shape
                 N = shard.rotate(shard.normals[n])
                 N /= np.linalg.norm(N)
-                b = max(0,N @ self.sun)
-                #B = lut[round(b*22)]
-                B = color_pallette[round(b*brightness_ramps)] #[material]
+                b = min(max(0,N @ self.sun),1)
                 for x4,y4,z4,w1,w2,w3 in self.triangle(x,y,z,x2,y2,z2,x3,y3,z3):
                     if x4 >= w or x4 < 0 or y4 >= h or y4 < 0:
                         continue
                     test = self.depth_buffer[y4,x4]
                     if z4 < test:
                         self.depth_buffer[y4,x4] = z4
-                        s1,h1 = self.texture_shade(uv1,uv2,uv3,w1,w2,w3,z,z2,z3)
-                        draw_buffer[int(y4*w + x4)] = B[s1][h1]
+                        b1,s1,h1 = self.texture_shade(uv1,uv2,uv3,w1,w2,w3,z,z2,z3,image,width,height)
+                        draw_buffer[int(y4*w + x4)] = color_palette[int(b1*b)][s1][h1]
         return draw_buffer
 
 if __name__ == "__main__":
-    license_info = "ままま、アラン・スミシー"
     term = Terminal()
-
     crs = Crystal(term.width,term.height)
-    simple_cas = from_obj("/home/captn/Untitled.obj")
+    simple_cas = from_obj("/home/captn/Downloads/simple_cassette.obj")
     miku = from_obj("/home/captn/Downloads/Appearance Miku/Appearance Miku.obj")
     fred = from_obj("/home/captn/Downloads/freddy.obj")
     spam = from_obj("/home/captn/spamton.obj")
@@ -418,14 +236,16 @@ if __name__ == "__main__":
     cassette = from_obj("/home/captn/Downloads/Cassette.obj")
     spam.rot_y(np.radians(180))
     fred.rot_y(np.radians(180))
+    simple_cas.rot_y(np.radians(180))
     plane.rot_y(np.radians(-90))
     #crs.add_shard(cube)
     #crs.add_shard(miku)
     #crs.add_shard(cassette)
+    #crs.add_shard(simple_cas)
     #crs.add_shard(spam)
-    crs.add_shard(plane)
+    #crs.add_shard(plane)
     #crs.add_shard(prsm)
-    #crs.add_shard(fred)
+    crs.add_shard(fred)
 
     import time
     import sys
@@ -475,6 +295,7 @@ if __name__ == "__main__":
                 #print(crs.project(key.mouse_yx,term.width,term.height))
             miku.rot_y(miku.rotation[1] + crs.delta_time*np.radians(90))
             cassette.rot_y(cassette.rotation[1] + crs.delta_time*np.radians(90))
+            #simple_cas.rot_y(simple_cas.rotation[1] + crs.delta_time*np.radians(90))
            # plane.rot_y(plane.rotation[1] + crs.delta_time*np.radians(90))
             fred.rot_y(fred.rotation[1] + np.radians(3))
             prsm.rot_x(prsm.rotation[0] + crs.delta_time*np.radians(90))
