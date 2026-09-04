@@ -5,3 +5,10 @@ Features:
   - Supports loading 3d models from .obj files complete with UV texture mapping.
   - Supports full color output in compatible terminal emulators.
   - 3D color texture mapping.
+
+
+Future improvements:
+  - Native c shaders using CPython's c bindings.
+  - Mouse input support.
+  - Entity culling for performance.
+  - Startup speed up (currently slow).
